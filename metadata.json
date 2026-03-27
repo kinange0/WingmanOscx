@@ -1,0 +1,8 @@
+{
+  "name": "Remix: AI Wingman OS rEMIX",
+  "description": "A private, intelligent relationship companion. Master of street slang (LUGHA ZA MTAANI/Kiswahili) and strategic advice.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
