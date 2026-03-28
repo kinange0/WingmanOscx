@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { supabase } from './supabaseClient';
+import { auth, db, googleProvider } from './firebaseConfig';
+import { onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail, signInWithPopup, signOut } from 'https://esm.sh/firebase/auth';
+import { collection, deleteDoc, doc, onSnapshot, orderBy, query, serverTimestamp, setDoc } from 'https://esm.sh/firebase/firestore';
 import { ContactList } from './components/ContactList';
 import { AdviceOutput } from './components/AdviceOutput';
 import { AddProfileModal } from './components/AddProfileModal';
@@ -9,9 +11,9 @@ import { Contact, AppState, UserState, Intensity, IntelligenceModule, Theme, Mes
 
 const App: React.FC = () => {
   // ============ AUTH STATE (KEEP AS IS) ============
-  const [session, setSession] = useState<any>(null);
+  const [currentUser, setCurrentUser] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
+  const [authMode, setAuthMode] = useState<'login' | 'signup' | 'forgot'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [authError, setAuthError] = useState('');
@@ -46,6 +48,7 @@ const App: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const recognitionRef = useRef<any>(null);
   const abortFlagRef = useRef(false);
+  const contactsUnsubscribeRef = useRef<(() => void) | null>(null);
 
   // ============ THEME COLORS ============
   const getThemeColors = () => {
@@ -67,73 +70,63 @@ const App: React.FC = () => {
   // ============ AUTH INITIALIZATION ============
   useEffect(() => {
     geminiService.current = new GeminiService();
-    
-    const initAuth = async () => {
-      try {
-        const { data: { session: currentSession } } = await supabase.auth.getSession();
-        setSession(currentSession);
-        if (currentSession?.user) {
-          loadUserData(currentSession.user.id);
-        }
-      } catch (err) {
-        console.error('Auth init error:', err);
-      } finally {
-        setAuthLoading(false);
-      }
-    };
-    
-    initAuth();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, sessionData) => {
-      setSession(sessionData);
-      if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && sessionData) {
-        loadUserData(sessionData.user.id);
-      }
-      if (event === 'SIGNED_OUT') {
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+      setCurrentUser(user);
+      setAuthLoading(false);
+
+      contactsUnsubscribeRef.current?.();
+      contactsUnsubscribeRef.current = null;
+
+      if (!user) {
         setState(prev => ({ ...prev, contacts: [], activeContactId: null }));
+        return;
       }
+
+      const contactsQuery = query(
+        collection(db, 'users', user.uid, 'contacts'),
+        orderBy('updatedAt', 'desc')
+      );
+
+      contactsUnsubscribeRef.current = onSnapshot(contactsQuery, (snapshot) => {
+        const contacts = snapshot.docs.map((docSnapshot) => {
+          const payload = docSnapshot.data() as { data?: Omit<Contact, 'id'> };
+          return {
+            id: docSnapshot.id,
+            ...(payload.data || {})
+          } as Contact;
+        });
+
+        setState(prev => ({
+          ...prev,
+          contacts,
+          activeContactId: contacts.some(c => c.id === prev.activeContactId)
+            ? prev.activeContactId
+            : (contacts[0]?.id || null)
+        }));
+      }, (err) => {
+        console.error('Failed to subscribe contacts:', err);
+      });
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      unsubscribeAuth();
+      contactsUnsubscribeRef.current?.();
+    };
   }, []);
 
   // ============ DATA FUNCTIONS ============
-  const loadUserData = async (userId: string) => {
-    try {
-      const { data, error } = await supabase
-        .from('contacts')
-        .select('*')
-        .eq('user_id', userId)
-        .order('id', { ascending: false });
-      
-      if (error) throw error;
-      
-      const contacts = (data || []).map(row => ({
-        id: row.id,
-        ...row.data
-      })) as Contact[];
-      
-      setState(prev => ({
-        ...prev,
-        contacts,
-        activeContactId: prev.activeContactId || (contacts.length > 0 ? contacts[0].id : null)
-      }));
-    } catch (err) {
-      console.error('Failed to load contacts:', err);
-    }
-  };
-
   const saveContactToDb = async (contact: Contact) => {
-    if (!session?.user?.id) return;
+    if (!currentUser?.uid) return;
     try {
       const { id, ...contactData } = contact;
-      await supabase
-        .from('contacts')
-        .upsert({
-          id,
-          user_id: session.user.id,
-          data: contactData
-        }, { onConflict: 'id' });
+      const contactRef = doc(db, 'users', currentUser.uid, 'contacts', id);
+      await setDoc(contactRef, {
+        userId: currentUser.uid,
+        data: contactData,
+        updatedAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+      }, { merge: true });
     } catch (err) {
       console.error('Failed to save contact:', err);
     }
@@ -160,7 +153,7 @@ const App: React.FC = () => {
       setAuthError('Please enter a valid email address');
       return;
     }
-    if (!password || password.length < 6) {
+    if (authMode !== 'forgot' && (!password || password.length < 6)) {
       setAuthError('Password must be at least 6 characters');
       return;
     }
@@ -169,24 +162,14 @@ const App: React.FC = () => {
     setIsAuthenticating(true);
     
     try {
-      if (authMode === 'signup') {
-        const { data, error } = await supabase.auth.signUp({
-          email: email.trim(),
-          password: password,
-        });
-        if (error) throw error;
-        if (data?.user && data.session) {
-          // Success
-        } else {
-          alert('Check your inbox to verify your account.');
-          setAuthMode('login');
-        }
+      if (authMode === 'forgot') {
+        await sendPasswordResetEmail(auth, email.trim());
+        alert('Password reset email sent. Check your inbox.');
+        setAuthMode('login');
+      } else if (authMode === 'signup') {
+        await createUserWithEmailAndPassword(auth, email.trim(), password);
       } else {
-        const { error } = await supabase.auth.signInWithPassword({
-          email: email.trim(),
-          password: password,
-        });
-        if (error) throw error;
+        await signInWithEmailAndPassword(auth, email.trim(), password);
       }
     } catch (error: any) {
       setAuthError(error.message || 'Authentication Protocol Failed');
@@ -195,8 +178,20 @@ const App: React.FC = () => {
     }
   };
 
+  const handleGoogleAuth = async () => {
+    setAuthError('');
+    setIsAuthenticating(true);
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (error: any) {
+      setAuthError(error.message || 'Google sign-in failed');
+    } finally {
+      setIsAuthenticating(false);
+    }
+  };
+
   const handleLogout = async () => {
-    await supabase.auth.signOut();
+    await signOut(auth);
   };
 
   // ============ AI FUNCTIONS ============
@@ -325,7 +320,7 @@ const App: React.FC = () => {
 
   // ============ CONTACT HANDLERS ============
   const handleAddProfile = async (name: string, notes: string, history: string, avatar?: string, historyImage?: any) => {
-    if (!session?.user?.id) return;
+    if (!currentUser?.uid) return;
     
     const newContact: Contact = {
       id: crypto.randomUUID(),
@@ -374,7 +369,9 @@ const App: React.FC = () => {
           activeContactId: prev.activeContactId === id ? (remaining.length > 0 ? remaining[0].id : null) : prev.activeContactId
         };
       });
-      await supabase.from('contacts').delete().eq('id', id);
+      if (currentUser?.uid) {
+        await deleteDoc(doc(db, 'users', currentUser.uid, 'contacts', id));
+      }
     }
   };
 
@@ -436,7 +433,7 @@ const App: React.FC = () => {
 
   if (authLoading) return <div className="h-screen w-full bg-[#020617] flex items-center justify-center"><div className="w-12 h-12 border-4 border-rose-500 border-t-transparent rounded-full animate-spin"></div></div>;
 
-  if (!session) {
+  if (!currentUser) {
     return (
       <div className={`min-h-screen w-full flex flex-col items-center justify-center ${themeColors.bg} text-white p-6 relative overflow-hidden`}>
         <div className={`glow-bg top-[-200px] left-[-200px] ${themeColors.glow}`}></div>
@@ -447,21 +444,37 @@ const App: React.FC = () => {
               <span className="text-5xl">🔥</span>
             </div>
             <h1 className="text-4xl lg:text-5xl font-black tracking-tighter uppercase">WINGMAN <span className="text-slate-600">OS</span></h1>
-            <p className="text-slate-500 font-mono text-[10px] uppercase tracking-[0.5em]">{authMode === 'signup' ? 'Dossier Registration' : 'Neural Grid Connect'}</p>
+            <p className="text-slate-500 font-mono text-[10px] uppercase tracking-[0.5em]">
+              {authMode === 'signup' ? 'Dossier Registration' : authMode === 'forgot' ? 'Recovery Protocol' : 'Neural Grid Connect'}
+            </p>
           </div>
           <div className="bg-slate-900/40 p-10 rounded-[2.5rem] border border-white/5 backdrop-blur-3xl shadow-2xl space-y-6">
             {authError && <div className="p-4 bg-rose-500/10 border border-rose-500/30 rounded-2xl text-rose-500 text-[10px] font-black uppercase text-center">{authError}</div>}
             <div className="space-y-4">
               <input type="email" placeholder="Email Terminal" value={email} onChange={e => setEmail(e.target.value)} className="w-full px-6 py-5 bg-slate-950/60 border border-white/10 rounded-2xl text-white placeholder:text-slate-700 focus:outline-none focus:border-rose-500 transition-all text-sm" />
-              <input type="password" placeholder="Access Key" value={password} onChange={e => setPassword(e.target.value)} onKeyPress={e => e.key === 'Enter' && handleAuth()} className="w-full px-6 py-5 bg-slate-950/60 border border-white/10 rounded-2xl text-white placeholder:text-slate-700 focus:outline-none focus:border-rose-500 transition-all text-sm" />
+              {authMode !== 'forgot' && (
+                <input type="password" placeholder="Access Key" value={password} onChange={e => setPassword(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleAuth()} className="w-full px-6 py-5 bg-slate-950/60 border border-white/10 rounded-2xl text-white placeholder:text-slate-700 focus:outline-none focus:border-rose-500 transition-all text-sm" />
+              )}
             </div>
             <button onClick={handleAuth} disabled={isAuthenticating} className="w-full py-5 bg-gradient-to-r from-rose-500 to-rose-600 text-white rounded-2xl font-black text-xs uppercase tracking-[0.4em] shadow-xl hover:opacity-90 active:scale-95 transition-all">
-              {isAuthenticating ? 'Initializing...' : (authMode === 'login' ? 'Establish Link' : 'Register Profile')}
+              {isAuthenticating ? 'Initializing...' : (authMode === 'login' ? 'Establish Link' : authMode === 'signup' ? 'Register Profile' : 'Send Reset Link')}
+            </button>
+            <button onClick={handleGoogleAuth} disabled={isAuthenticating} className="w-full py-4 bg-white text-slate-900 rounded-2xl font-black text-xs uppercase tracking-[0.3em] shadow-xl hover:opacity-90 active:scale-95 transition-all">
+              Continue with Google
+            </button>
+            <button onClick={() => setAuthMode('forgot')} className="w-full text-slate-500 text-[10px] font-black uppercase tracking-widest hover:text-white transition-colors">
+              Forgot Password?
             </button>
           </div>
-          <button onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')} className="w-full text-slate-500 text-[10px] font-black uppercase tracking-widest hover:text-white transition-colors">
-            {authMode === 'login' ? "New Operative? Request Clearance" : "Existing File? Reconnect Portal"}
-          </button>
+          {authMode === 'forgot' ? (
+            <button onClick={() => setAuthMode('login')} className="w-full text-slate-600 text-[10px] font-black uppercase tracking-widest hover:text-white transition-colors">
+              Back to Login
+            </button>
+          ) : (
+            <button onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')} className="w-full text-slate-500 text-[10px] font-black uppercase tracking-widest hover:text-white transition-colors">
+              {authMode === 'login' ? "New Operative? Request Clearance" : "Existing File? Reconnect Portal"}
+            </button>
+          )}
         </div>
       </div>
     );
