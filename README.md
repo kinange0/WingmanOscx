@@ -15,6 +15,15 @@ View your app in AI Studio: https://ai.studio/apps/b159eb9d-13b9-4c06-9078-3922f
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+2. Set `VITE_GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
 3. Run the app:
    `npm run dev`
+
+## Prompt Templates
+
+Reusable engineering review prompt templates are available at [`docs/review-prompt-templates.md`](docs/review-prompt-templates.md).
+
+
+## Free Hosting + Free API Guide
+
+See [`docs/free-hosting-and-api-guide.md`](docs/free-hosting-and-api-guide.md) for a step-by-step guide to deploy from GitHub for free and configure a free API path.
