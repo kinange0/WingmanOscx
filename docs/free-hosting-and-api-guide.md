@@ -4,6 +4,17 @@ This guide shows how to host this app for free from GitHub and use a free-tier A
 
 ## Option A (Recommended): Vercel + GitHub + Gemini API free tier
 
+## Short answer to "Nikiweka tu `VITE_GEMINI_API_KEY` then Deploy?"
+
+Ndiyo, **karibu** hiyo tu inatosha kwa Vercel, lakini hakikisha mambo haya 4 yapo sawa:
+
+1. Repo ipo GitHub na imeunganishwa kwenye Vercel project sahihi.
+2. Environment Variable imewekwa kwa environment unayotaka (Production/Preview/Development).
+3. Variable name ni **exactly** `VITE_GEMINI_API_KEY` (hakuna typo/space).
+4. Baada ya kuweka env var, fanya **Redeploy** (ili build mpya isome key).
+
+Ukikosa hatua ya 4, app inaweza kuendelea kuonyesha error ya missing key hata kama ume-set variable.
+
 ### 1) Push your code to GitHub
 1. Create a repo on GitHub.
 2. Push this project.
