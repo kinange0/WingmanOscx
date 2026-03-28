@@ -16,7 +16,6 @@ const CopyButton: React.FC<{ text: string; themeColor: string }> = ({ text, them
     e.stopPropagation();
     if (!text) return;
     try {
-      // Fix: Changed readText(text) to writeText(text) to correctly copy content to clipboard
       await navigator.clipboard.writeText(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
@@ -63,7 +62,6 @@ export const AdviceOutput: React.FC<AdviceOutputProps> = ({ advice, isGenerating
 
   const copyToClipboard = async (text: string, id: string, idx: number) => {
     try {
-      // Fix: Changed readText(text) to writeText(text) to correctly copy content to clipboard
       await navigator.clipboard.writeText(text);
       setCopyStatus(id);
       setSelectedIdx(idx); 

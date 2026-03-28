@@ -48,7 +48,7 @@ export const INITIAL_CONTACTS: any[] = [
     suggestion: "Use 'Pull Back' tactics to trigger her curiosity.",
     starters: ["I just saw something that reminded me of your chaotic energy.", "You look like trouble. The good kind or the Masaki kind?"],
     forbiddenWords: ["Please", "Can I?", "Sorry for the late reply", "Why are you quiet?"],
-    reminders: ["Stop double texting", "Don't complement her looks more than once a week", "Keep replies shorter than hers"],
+    reminders: ["Stop double texting", "Don't compliment her looks more than once a week", "Keep replies shorter than hers"],
     peakHours: "9:00 PM - 11:30 PM",
     stats: {
       interestLevel: 72,
