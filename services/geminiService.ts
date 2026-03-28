@@ -2,17 +2,28 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { SYSTEM_PROMPT } from "../constants";
 import { Contact, Intensity, UserState, WingmanAdvice, MediaPart, IntelligenceModule, VibeMode } from "../types";
 
+const resolveGeminiApiKey = (): string => {
+  const viteKey = import.meta.env?.VITE_GEMINI_API_KEY;
+  const legacyKey = import.meta.env?.VITE_API_KEY;
+
+  if (viteKey && viteKey.trim()) return viteKey.trim();
+  if (legacyKey && legacyKey.trim()) return legacyKey.trim();
+
+  throw new Error(
+    "Missing Gemini API key. Set VITE_GEMINI_API_KEY in your .env.local file."
+  );
+};
+
 export class GeminiService {
-  // Use a public getter to ensure we always have a fresh instance per call, 
-  // following best practices for API key management and allowing external access for SOS protocols.
+  // Expose a fresh client instance to avoid stale credentials between calls.
   public get ai(): GoogleGenAI {
-    return new GoogleGenAI({ apiKey: process.env.API_KEY });
+    return new GoogleGenAI({ apiKey: resolveGeminiApiKey() });
   }
 
   private cleanJsonResponse(text: string): string {
     if (!text) return '{}';
     let cleaned = text.trim();
-    
+
     // Extract JSON if wrapped in markdown or other text
     const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
@@ -22,7 +33,7 @@ export class GeminiService {
     // Remove markdown code blocks if present
     cleaned = cleaned.replace(/^```json\s*/, '').replace(/```\s*$/, '');
     cleaned = cleaned.replace(/^```\s*/, '').replace(/```\s*$/, '');
-    
+
     return cleaned.trim();
   }
 
@@ -63,14 +74,14 @@ export class GeminiService {
     `;
 
     try {
-      const contents = media 
+      const contents = media
         ? { parts: [{ text: prompt }, media] }
         : prompt;
 
       const response = await this.ai.models.generateContent({
         model: 'gemini-3-flash-preview',
         contents,
-        config: { 
+        config: {
             responseMimeType: "application/json",
             responseSchema: {
                 type: Type.OBJECT,
@@ -90,7 +101,7 @@ export class GeminiService {
       const cleaned = this.cleanJsonResponse(text);
       try {
         return JSON.parse(cleaned);
-      } catch (e) {
+      } catch {
         return JSON.parse(this.tryRepairJson(cleaned));
       }
     } catch (err) {
@@ -109,7 +120,7 @@ export class GeminiService {
   }
 
   async refreshStarters(contact: Contact, context?: string): Promise<{ starters: string[], forbiddenWords: string[] }> {
-    // Fix: Updated comparison to include 'user_input' from corrected Message role union type
+    // Include both user role labels so outbound and manual input are tagged as ME.
     const history = contact.history.slice(-15).map(m => `${m.role === 'user' || m.role === 'user_input' ? 'ME' : 'HER'}: ${m.content}`).join('\n');
     const prompt = `
       TASK: Generate 4 tactical conversation starters for ${contact.name}.
@@ -121,12 +132,12 @@ export class GeminiService {
       The starters should feel like elite operations being initialized.
       Ensure ${contact.name}'s name is used in most starters for personalization.
     `;
-    
+
     try {
       const response = await this.ai.models.generateContent({
         model: 'gemini-3-flash-preview',
         contents: prompt,
-        config: { 
+        config: {
             responseMimeType: "application/json",
             responseSchema: {
                 type: Type.OBJECT,
@@ -141,7 +152,7 @@ export class GeminiService {
       const cleaned = this.cleanJsonResponse(text);
       try {
         return JSON.parse(cleaned);
-      } catch (e) {
+      } catch {
         return JSON.parse(this.tryRepairJson(cleaned));
       }
     } catch (err) {
@@ -159,15 +170,17 @@ export class GeminiService {
     context: string,
     media?: MediaPart
   ): Promise<WingmanAdvice> {
-    // Fix: Updated comparison to include 'user_input' from corrected Message role union type
+    // Include both user role labels so outbound and manual input are tagged as ME.
     const history = contact.history.slice(-15).map(m => `${m.role === 'user' || m.role === 'user_input' ? 'ME' : 'HER'}: ${m.content}`).join('\n');
-    
+
     const prompt = `
       PROTOCOL: ${module.toUpperCase()}
       MODE: ${userState.toUpperCase()}
       TARGET: ${contact.name}
       OBJECTIVE: ${context}
       HISTORY: ${history}
+      INTENSITY: ${intensity}
+      VIBE_MODE: ${vibeMode}
       
       CRITICAL: Return EXACTLY 3 options in the specific JSON format. Ensure the response is complete and not truncated.
     `;
@@ -221,16 +234,12 @@ export class GeminiService {
 
       const rawText = response.text || '{}';
       const cleanedText = this.cleanJsonResponse(rawText);
-      
+
       try {
         return JSON.parse(cleanedText) as WingmanAdvice;
-      } catch (parseError) {
+      } catch {
         const repaired = this.tryRepairJson(cleanedText);
-        try {
-          return JSON.parse(repaired) as WingmanAdvice;
-        } catch (secondError) {
-           throw secondError;
-        }
+        return JSON.parse(repaired) as WingmanAdvice;
       }
     } catch (error) {
       console.error("Neural Processing Error:", error);
